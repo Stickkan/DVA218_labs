@@ -4,26 +4,24 @@
    protocol family.
 */
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netdb.h>
-#include <netinet/in.h>
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/times.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <stdio.h>
+#include <sys/times.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
 #define PORT 5555
 #define MAXMSG 512
-#define PORT 5555
-#define hostNameLength 50
-#define messageLength  256
-#define welMsg "Welcome human, I can hear you"
+#define FD_SETSIZE 1024
 
-
+char *addressToBlock = "127.0.0.1";
 /*
   makeSocket
   Creates and names a socket in the Internet
@@ -37,9 +35,12 @@
 */
 
 int makeSocket(unsigned short int port) {
+
   int sock;
   struct sockaddr_in name;
+
   /* Create a socket. */
+
   sock = socket(PF_INET, SOCK_STREAM, 0);
 
   if (sock < 0) {
@@ -49,16 +50,21 @@ int makeSocket(unsigned short int port) {
 
   /* Give the socket a name. */
   /* Socket address format set to AF_INET for Internet use. */
+
   name.sin_family = AF_INET;
+
   /* Set port number. The function htons converts from host byte order to
    * network byte order.*/
+
   name.sin_port = htons(port);
+
 #if 0
   Set the Internet address of the host the function is called from.
   The function htonl converts INADDR_ANY from host byte order to network byte order. * /
   (htonl does the same thing as htons but the former converts a long integer whereas
    htons converts a short.)
 #endif
+
   name.sin_addr.s_addr = htonl(INADDR_ANY);
 
   /* Assign an address to the socket by calling bind. */
@@ -79,8 +85,10 @@ file (socket
 #endif
 
 int readMessageFromClient(int fileDescriptor) {
+
   char buffer[MAXMSG];
   int nOfBytes;
+
   nOfBytes = read(fileDescriptor, buffer, MAXMSG);
 
   if (nOfBytes < 0) {
@@ -89,7 +97,8 @@ int readMessageFromClient(int fileDescriptor) {
   } 
   else if (nOfBytes == 0) { /* End of file */
     return (-1);
-  } else
+  } 
+  else
   /* Data read */
   {
     printf(">Incoming message: %s\n", buffer);
@@ -98,10 +107,10 @@ int readMessageFromClient(int fileDescriptor) {
   return (0);
 }
 
-void
-writeMessage(int fileDescriptor, char* message)
-{
+void writeMessageServer(int fileDescriptor, char *message) {
+
   int nOfBytes;
+
   nOfBytes = write(fileDescriptor, message, strlen(message) + 1);
 
   if (nOfBytes < 0) {
@@ -110,10 +119,21 @@ writeMessage(int fileDescriptor, char* message)
   }
 }
 
+int isIPBlocked(char* address){
+
+  if(strcmp(address, addressToBlock)== 0)
+    return 1;
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
+
   int sock;
   int clientSocket;
   int i;
+  char *welcomeMessage = "Welcome Human!";
+  char *rejectMessage = "Connection refused!\n";
+
   fd_set activeFdSet, readFdSet; /* Used by select */
   struct sockaddr_in clientName;
   socklen_t size;
@@ -142,23 +162,40 @@ int main(int argc, char *argv[]) {
     }
 
     /* Service all the sockets with input pending */
-    for (i = 0; i < FD_SETSIZE; ++i)
+    for (i = 0; i < FD_SETSIZE; ++i){
       if (FD_ISSET(i, &readFdSet)) {
         if (i == sock) {
           /* Connection request on original socket */
           size = sizeof(struct sockaddr_in);
-          /* Accept the connection request from a client. */
-          clientSocket =
-              accept(sock, (struct sockaddr *)&clientName, (socklen_t *)&size);
 
-          if (clientSocket < 0) {
+          /* Accept the connection request from a client. */
+
+          char *address = inet_ntoa(clientName.sin_addr);
+          clientSocket = accept(sock, (struct sockaddr *)&clientName, (socklen_t *)&size);
+          
+          if(isIPBlocked(address)) {
+            writeMessageServer(clientSocket, rejectMessage);
+            close(clientSocket);
+          }
+          else{
+            if (clientSocket < 0) {
             perror("Could not accept connection\n");
             exit(EXIT_FAILURE);
-          }
+            }
+            printf("Server: Connect from client %s, port %d\n",
+            inet_ntoa(clientName.sin_addr), ntohs(clientName.sin_port));
+            FD_SET(clientSocket, &activeFdSet);
+            writeMessageServer(sock, welcomeMessage);
 
-          printf("Server: Connect from client %s, port %d\n", inet_ntoa(clientName.sin_addr), ntohs(clientName.sin_port));
-          FD_SET(clientSocket, &activeFdSet);
-          writeMessage(sock, welMsg);
+            FD_SET(clientSocket, &activeFdSet);
+
+            char *newClient = "Another client has connected!\n";
+
+            for(int j = 4; j<FD_SETSIZE; j++){
+              if(FD_ISSET(j, &activeFdSet)&& j != clientSocket)
+                writeMessageServer(j, newClient);
+            }
+          }          
         } else {
           /* Data arriving on an already connected socket */
           if (readMessageFromClient(i) < 0) {
@@ -167,5 +204,6 @@ int main(int argc, char *argv[]) {
           }
         }
       }
+    }
   }
 }
